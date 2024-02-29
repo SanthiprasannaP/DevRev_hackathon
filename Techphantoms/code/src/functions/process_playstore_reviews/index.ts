@@ -9,6 +9,7 @@ export const run = async (events: any[]) => {
     const token: string = event.context.secrets.service_account_token;
     const fireWorksApiKey: string = event.input_data.keyrings.fireworks_api_key;
     const rapidApiKey: string = event.input_data.keyrings.rapid_api_key;
+    const gptzeroApiKey: string = event.input_data.keyrings.gptzero_api_key;
     const apiUtil: ApiUtils = new ApiUtils(endpoint, token);
     // Get the number of reviews to fetch from command args.
     const snapInId = event.context.snap_in_id;
@@ -145,7 +146,7 @@ export const run = async (events: any[]) => {
       // TODO: Identify computer generated reviews
       // let cgResponse: number = 0;
       try {
-        const cgResponse: number = await apiUtil.predictText(review.text);
+        const cgResponse: number = await apiUtil.predictText(review.text, gptzeroApiKey);
         if (cgResponse > 0.8) {
           cgCounter++;
           console.log(`Review is computer generated. Skipping ticket creation.`);
@@ -299,7 +300,7 @@ export const run = async (events: any[]) => {
         let llmBugResponse = {};
         const reviewBugText = `Summary: ${reviewSummary}\n\nReason: ${reviewReason}\n\nBug text: ${review.text}`;
         const reviewBugTitle = review.title || `Ticket created from Playstore review ${review.url}`;
-        const systemBugPrompt = `You are an expert at understanding the business impact of a bug. You are given a review provided by a user for the app ${inputs['app_id']}. The output should be a JSON with fields "impact" and "severity". The "impact" field should have a explanation in under 40 words. The "severity" field should be a single number between 0 and 10. \n\nReview: {review}\n\nOutput:`;
+        const systemBugPrompt = `You are an expert at understanding the business impact of a bug. You are given a review provided by a user for the app ${inputs['app_id']}. The output should be a JSON with fields "impact" and "severity" and "solution"". The "impact" field should have a business impact explanation in under 50 words. The "severity" field should be a single number between 0 and 10. The "solution" should have a potential fix to the bug in under 50 words. \n\nReview: {review}\n\nOutput:`;
         const humanBugPrompt = '';
         try {
           llmSpamResponse = await llmUtil.chatCompletion(systemBugPrompt, humanBugPrompt, {
@@ -311,6 +312,7 @@ export const run = async (events: any[]) => {
         }
 
         let bugImpact = '';
+        let bugSolution = '';
         let bugSeverity = 0;
         if ('impact' in llmBugResponse) {
           bugImpact = llmBugResponse['impact'] as string;
@@ -322,6 +324,13 @@ export const run = async (events: any[]) => {
         } catch (err) {
           console.error(`Error while Parsing Severity: ${err}`);
         }
+        try {
+          if ('solution' in llmBugResponse) {
+            bugSolution = llmBugResponse['solution'] as string;
+          }
+        } catch (err) {
+          console.error(`Error while Parsing Severity: ${err}`);
+        }
 
         // Create a ticket with title as review title and description as review text.
         const createTicketResp = await apiUtil.createTicket({
@@ -329,18 +338,30 @@ export const run = async (events: any[]) => {
           tags: [
             { id: tags[inferredCategory].id },
             { id: tags['PlayStore'].id },
-            SentimentScore > 0.5 ? { id: tags['Positive'].id } : { id: tags['Negative'].id },
+            SentimentScore > 0.05
+              ? { id: tags['Positive'].id }
+              : SentimentScore < -0.05
+              ? { id: tags['Negative'].id }
+              : { id: tags['Neutral'].id },
           ],
           body:
             reviewText +
-            '\n\n' +
+            '\n\n🐛 Bug Business Impact: \n' +
             bugImpact +
-            '\n\n Bug severity: ' +
+            '\n\n💡 Bug Solution: \n' +
+            bugSolution +
+            '\n\n🔴 Bug severity: ' +
             bugSeverity.toString() +
-            '\n\n Feedback Sentiment: ' +
+            '\n\n💬 Customer Sentiment: ' +
             feedbackSentiment,
           type: publicSDK.WorkType.Ticket,
           owned_by: [inputs['default_owner_id']],
+          severity:
+            bugSeverity >= 7
+              ? publicSDK.TicketSeverity.High
+              : bugSeverity >= 4
+              ? publicSDK.TicketSeverity.Medium
+              : publicSDK.TicketSeverity.Low,
           applies_to_part: inputs['default_part_id'],
         });
         if (!createTicketResp.success) {
@@ -384,7 +405,7 @@ export const run = async (events: any[]) => {
         let llmFeatureResponse = {};
         const reviewFeatureText = `Summary: ${reviewSummary}\n\nReason: ${reviewReason}\n\nFeature request: ${review.text}`;
         const reviewFeatureTitle = review.title || `Ticket created from Playstore review ${review.url}`;
-        const systemFeaturePrompt = `You are an expert at understanding the business impact of a feature request. You are given a review provided by a user for the app ${inputs['app_id']}. The output should be a JSON with fields "impact" and "severity". The "impact" field should have a explanation in under 40 words. The "severity" field should be a single number between 0 and 10. \n\nReview: {review}\n\nOutput:`;
+        const systemFeaturePrompt = `You are an expert at understanding the business impact of a feature request. You are given a review provided by a user for the app ${inputs['app_id']}. The output should be a JSON with fields "impact" and "severity". The "impact" field should have a business impact explanation in under 40 words. The "severity" field should be a single number between 0 and 10. \n\nReview: {review}\n\nOutput:`;
         const humanFeaturePrompt = '';
         try {
           llmFeatureResponse = await llmUtil.chatCompletion(systemFeaturePrompt, humanFeaturePrompt, {
@@ -414,17 +435,29 @@ export const run = async (events: any[]) => {
           tags: [
             { id: tags[inferredCategory].id },
             { id: tags['PlayStore'].id },
-            SentimentScore > 0 ? { id: tags['Positive'].id } : { id: tags['Negative'].id },
+            SentimentScore > 0.05
+              ? { id: tags['Positive'].id }
+              : SentimentScore < -0.05
+              ? { id: tags['Negative'].id }
+              : { id: tags['Neutral'].id },
           ],
           body:
             reviewText +
-            '\n\n' +
+            '\n\n💡 Request Summary: \n' +
+            reviewSummary +
+            '\n\n💼 Feature Business Impact: \n' +
             featureImpact +
-            '\n\n Bug severity: ' +
+            '\n\n🔴 Feature importance: ' +
             featureSeverity.toString() +
-            '\n\n Feedback Sentiment: ' +
+            '\n\n💬 Customer Sentiment: ' +
             feedbackSentiment,
           type: publicSDK.WorkType.Ticket,
+          severity:
+            featureSeverity >= 7
+              ? publicSDK.TicketSeverity.High
+              : featureSeverity >= 4
+              ? publicSDK.TicketSeverity.Medium
+              : publicSDK.TicketSeverity.Low,
           owned_by: [inputs['default_owner_id']],
           applies_to_part: inputs['default_part_id'],
         });
@@ -473,16 +506,27 @@ export const run = async (events: any[]) => {
           tags: [
             { id: tags[inferredCategory].id },
             { id: tags['PlayStore'].id },
-            SentimentScore > 0 ? { id: tags['Positivity'].id } : { id: tags['Negativity'].id },
+            SentimentScore > 0.05
+              ? { id: tags['Positive'].id }
+              : SentimentScore < -0.05
+              ? { id: tags['Negative'].id }
+              : { id: tags['Neutral'].id },
           ],
           body:
-            'Review Summary: ' +
+            reviewText +
+            '\n\n🖋️ Review Summary: ' +
             reviewSummary +
-            '\n\n Feedback Sentiment: ' +
+            '\n\n💬 Feedback Sentiment: ' +
             feedbackSentiment.toString() +
-            '\n\n Sentiment Score: ' +
+            '\n\n🔴 Sentiment Score: ' +
             SentimentScore.toString(),
           type: publicSDK.WorkType.Ticket,
+          severity:
+            SentimentScore < -0.05
+              ? publicSDK.TicketSeverity.High
+              : SentimentScore > 0.05
+              ? publicSDK.TicketSeverity.Medium
+              : publicSDK.TicketSeverity.Low,
           owned_by: [inputs['default_owner_id']],
           applies_to_part: inputs['default_part_id'],
         });
@@ -507,15 +551,13 @@ export const run = async (events: any[]) => {
     }
     // TODO: Sentiment trend analysis for all feedback
     if (feedbackCounter > 0) {
-      postResp = await apiUtil.postTextMessage(
+      postResp = await apiUtil.postTextMessageWithVisibilityTimeout(
         snapInId,
-        `Overall Customer Sentiment Score: ${
-          SentimentTotal / feedbackCounter
-        } \n-ve indicates negative feedback +ve is positive feedback`
+        `Overall Average Customer Sentiment Score: ${SentimentTotal / feedbackCounter}`,
+        1
       );
       if (!postResp.success) {
         console.error(`Error while creating timeline entry: ${postResp.message}`);
-        continue;
       }
     }
 
@@ -534,9 +576,10 @@ export const run = async (events: any[]) => {
 
       if ('answer' in topFeatureRequest) {
         const topFeatureDescription = topFeatureRequest['answer'] as string;
-        const postFeatureResp = await apiUtil.postTextMessage(
+        const postFeatureResp = await apiUtil.postTextMessageWithVisibilityTimeout(
           snapInId,
-          'Top requested feature: ' + topFeatureDescription
+          'Top requested feature: ' + topFeatureDescription,
+          1
         );
         if (!postFeatureResp.success) {
           console.error(`Error while creating timeline entry: ${postFeatureResp.message}`);
@@ -560,7 +603,11 @@ export const run = async (events: any[]) => {
 
       if ('answer' in topBug) {
         const topBugDescription = topBug['answer'] as string;
-        const postBugResp = await apiUtil.postTextMessage(snapInId, 'Top reported bug: ' + topBugDescription);
+        const postBugResp = await apiUtil.postTextMessageWithVisibilityTimeout(
+          snapInId,
+          'Top reported bug: ' + topBugDescription,
+          1
+        );
         if (!postBugResp.success) {
           console.error(`Error while creating timeline entry: ${postBugResp.message}`);
         }
@@ -583,7 +630,11 @@ export const run = async (events: any[]) => {
 
       if ('answer' in overallFeedback) {
         const sentiment = overallFeedback['answer'] as string;
-        const postFeedbackResp = await apiUtil.postTextMessage(snapInId, 'Top customer feedback: ' + sentiment);
+        const postFeedbackResp = await apiUtil.postTextMessageWithVisibilityTimeout(
+          snapInId,
+          'Top customer feedback: ' + sentiment,
+          1
+        );
         if (!postFeedbackResp.success) {
           console.error(`Error while creating timeline entry: ${postFeedbackResp.message}`);
         }
@@ -595,8 +646,9 @@ export const run = async (events: any[]) => {
     // TODO: Identifying customer knowledge gaps only if there are questions.
     if (questionList.length > 0) {
       let overallSentiment = {};
+      let AverageSentiment = SentimentTotal / feedbackCounter;
 
-      const systemSentimentPrompt = `You are an expert at understanding the business intracies and filling customer knowlegde gaps. You are given a list of questions provided by a user for the app ${inputs['app_id']}. The output should be a JSON with field "answer". The "answer" field should have a explanation of the knowledge gaps of the customer in less than 50 words.  \n\nReview: {review}\n\nOutput:`;
+      const systemSentimentPrompt = `You are an expert at understanding the business intracies and filling customer knowlegde gaps. You are given a list of questions provided by a user for the app ${inputs['app_id']}. The output should be a JSON with field "answer". The "answer" field should have a explanation of the knowledge gaps of the customer in less than 500 words.  \n\nReview: {review}\n\nOutput:`;
       const humanSentimentPrompt = '';
       try {
         overallSentiment = await llmUtil.chatCompletion(systemSentimentPrompt, humanSentimentPrompt, {
@@ -608,9 +660,47 @@ export const run = async (events: any[]) => {
 
       if ('answer' in overallSentiment) {
         const sentiment = overallSentiment['answer'] as string;
-        const postSentimentResp = await apiUtil.postTextMessage(snapInId, 'Overall Sentiment: ' + sentiment);
-        if (!postSentimentResp.success) {
-          console.error(`Error while creating timeline entry: ${postSentimentResp.message}`);
+        // create ticket with sentiment
+        const createTicketResp = await apiUtil.createTicket({
+          title: 'Summary of all questions asked and knowlegde gaps known',
+          tags: [
+            { id: tags['PlayStore'].id },
+            AverageSentiment > 0.05
+              ? { id: tags['Positive'].id }
+              : AverageSentiment < -0.05
+              ? { id: tags['Negative'].id }
+              : { id: tags['Neutral'].id },
+          ],
+          body:
+            '🖋️ Knowlegde gaps: ' +
+            overallSentiment['answer'] +
+            '\n\n💬 Question Summaries List: ' +
+            questionList.join('\n'),
+          type: publicSDK.WorkType.Ticket,
+          severity:
+            AverageSentiment < -0.05
+              ? publicSDK.TicketSeverity.High
+              : AverageSentiment > 0.05
+              ? publicSDK.TicketSeverity.Medium
+              : publicSDK.TicketSeverity.Low,
+          owned_by: [inputs['default_owner_id']],
+          applies_to_part: inputs['default_part_id'],
+        });
+        if (!createTicketResp.success) {
+          console.error(`Error while creating ticket: ${createTicketResp.message}`);
+          continue;
+        }
+        // Post a message with ticket ID.
+        const ticketID = createTicketResp.data.work.id;
+        const ticketCreatedMessage = `Created ticket: <${ticketID}> with the summary of all questions asked and knowlegde gaps known`;
+        const postTicketResp: HTTPResponse = await apiUtil.postTextMessageWithVisibilityTimeout(
+          snapInId,
+          ticketCreatedMessage,
+          1
+        );
+        if (!postTicketResp.success) {
+          console.error(`Error while creating timeline entry: ${postTicketResp.message}`);
+          continue;
         }
       }
     } else {
@@ -618,15 +708,19 @@ export const run = async (events: any[]) => {
     }
 
     // postResp the counters
-    postResp = await apiUtil.postTextMessage(
+    postResp = await apiUtil.postTextMessageWithVisibilityTimeout(
       snapInId,
-      `Spam reviews: ${spamCounter}\nNSFW reviews: ${nsfwCounter}\nDuplicate reviews: ${duplicateCounter}\nAI reviews detected: ${cgCounter}`
+      `Spam reviews: ${spamCounter}\nNSFW reviews: ${nsfwCounter}\nDuplicate reviews: ${duplicateCounter}\nAI reviews detected: ${cgCounter}`,
+      1
     );
-    postResp = await apiUtil.postTextMessage(
+
+    postResp = await apiUtil.postTextMessageWithVisibilityTimeout(
       snapInId,
-      `Total feedback: ${feedbackCounter} \n Total bugs: ${bugCounter} \n Total feature Requests: ${featureRequestCounter} \n Total questions: ${questionCounter}`
+      `Total feedback: ${feedbackCounter} \n Total bugs: ${bugCounter} \n Total feature Requests: ${featureRequestCounter} \n Total questions: ${questionCounter}`,
+      1
     );
   }
+  return;
 };
 
 export default run;

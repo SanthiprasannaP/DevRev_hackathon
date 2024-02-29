@@ -18,6 +18,11 @@ keyrings:
       types:
         - snap_in_secret
       display_name: Rapid API Key
+    - name: gptzero_api_key
+      description: "Put in your GPT Zero key"
+      types:
+        - snap_in_secret
+      display_name: GPT Zero API Key
 
 inputs:
   organization:
@@ -134,9 +139,11 @@ tags:
   - name: Twitter
     description: "Twitter reviews"
   - name: Positive
-    description: "Satisfied with positive sentiment"
+    description: "Satisfied/positive sentiment"
+  - name: Neutral
+    description: "Neutral sentiment"
   - name: Negative
-    description: "Frustrated with negative sentiment"
+    description: "Frustrated/Negative sentiment"
 
 commands:
   - name: playstore_reviews_process

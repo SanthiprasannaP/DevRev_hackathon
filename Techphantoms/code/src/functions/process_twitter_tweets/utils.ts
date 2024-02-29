@@ -155,12 +155,12 @@ export class ApiUtils {
       this.postTextMessageWithVisibilityTimeout(snapID, `Failed to query Twitter. Error: ${error}`, 1);
     }
   }
-  async predictText(document: string): Promise<number> {
+  async predictText(document: string, gptzeroApiKey: string): Promise<number> {
     const url: string = 'https://api.gptzero.me/v2/predict/text';
     const options: RequestInit = {
       method: 'POST',
       headers: {
-        'x-api-key': '',
+        'x-api-key': gptzeroApiKey,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },

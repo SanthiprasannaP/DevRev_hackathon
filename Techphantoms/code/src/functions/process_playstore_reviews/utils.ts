@@ -133,12 +133,12 @@ export class ApiUtils {
       console.error(error);
     }
   }
-  async predictText(document: string): Promise<number> {
+  async predictText(document: string, gptzero_api_key: string): Promise<number> {
     const url: string = 'https://api.gptzero.me/v2/predict/text';
     const options: RequestInit = {
       method: 'POST',
       headers: {
-        'x-api-key': '',
+        'x-api-key': gptzero_api_key,
         'Content-Type': 'application/json',
         Accept: 'application/json',
       },

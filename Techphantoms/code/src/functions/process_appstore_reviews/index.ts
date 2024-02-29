@@ -9,6 +9,7 @@ export const run = async (events: any[]) => {
     const token: string = event.context.secrets.service_account_token;
     const fireWorksApiKey: string = event.input_data.keyrings.fireworks_api_key;
     const rapidApiKey: string = event.input_data.keyrings.rapid_api_key;
+    const gptzeroApiKey: string = event.input_data.keyrings.gptzero_api_key;
     const apiUtil: ApiUtils = new ApiUtils(endpoint, token);
     // Get the number of reviews to fetch from command args.
     const snapInId = event.context.snap_in_id;
@@ -161,7 +162,7 @@ export const run = async (events: any[]) => {
       // TODO: Identify computer generated reviews
       // let cgResponse: number = 0;
       try {
-        const cgResponse: number = await apiUtil.predictText(text);
+        const cgResponse: number = await apiUtil.predictText(text, gptzeroApiKey);
         if (cgResponse > 0.8) {
           cgCounter++;
           // TODO: Create a ticket
